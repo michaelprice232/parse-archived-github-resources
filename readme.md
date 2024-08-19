@@ -29,8 +29,8 @@ resource "github_repository" "another_example_repo" {
 
 ## Example output file (one per source Terraform file)
 ```shell
-terragrunt state rm github_repository.repo_1
-terragrunt state rm module.repo_2
+terragrunt state rm github_repository.another_example_repo
+terragrunt state rm module.example_repo
 ```
 
 ## How to run

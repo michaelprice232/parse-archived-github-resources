@@ -21,7 +21,7 @@ func main() {
 	flag.Parse()
 	rootDirectory := *root
 
-	tfFiles, err := getTerraformFilesInDirectories(rootDirectory)
+	tfFiles, err := getTerraformFiles(rootDirectory)
 	if err != nil {
 		log.Fatalf("error whilst listing Terraform files from root directory %s: %v", rootDirectory, err)
 	}
@@ -35,6 +35,52 @@ func main() {
 type terraformFile struct {
 	fileName      string
 	directoryName string
+}
+
+// getTerraformFiles returns all the Terraform (*.tf) files one directory down from the rootPath.
+// Filters for only Terraform files which include github_repository references, either explicit or in a module.
+// Excludes config.tf files as these are symlinked and contain target strings in comments which is causing false positives.
+func getTerraformFiles(rootPath string) ([]terraformFile, error) {
+	results := make([]terraformFile, 0)
+
+	rootEntries, err := os.ReadDir(rootPath)
+	if err != nil {
+		return results, fmt.Errorf("failed to read root directory: %w", err)
+	}
+
+	for _, entry := range rootEntries {
+		if entry.IsDir() {
+			childDirectoryPath := filepath.Join(rootPath, entry.Name())
+
+			childDirEntries, err := os.ReadDir(childDirectoryPath)
+			if err != nil {
+				return results, fmt.Errorf("failed to read child directory %s: %w", childDirectoryPath, err)
+			}
+
+			for _, childDirEntry := range childDirEntries {
+				// Only process *.tf files
+				if strings.HasSuffix(childDirEntry.Name(), ".tf") {
+
+					// Check that the file contains either a module reference or a github_repository reference.
+					// Also exclude config.tf as this is a symlink and causes a false positive due to a string being the comments.
+					body, err := os.ReadFile(filepath.Join(childDirectoryPath, childDirEntry.Name()))
+					if err != nil {
+						return results, fmt.Errorf("failed to read file %s: %w", filepath.Join(childDirectoryPath, childDirEntry.Name()), err)
+					}
+					if (!strings.Contains(string(body), "github_repository") && !strings.Contains(string(body), targetTFModuleName)) || childDirEntry.Name() == "config.tf" {
+						continue
+					}
+
+					results = append(results, terraformFile{
+						fileName:      childDirEntry.Name(),
+						directoryName: entry.Name(),
+					})
+				}
+			}
+		}
+	}
+
+	return results, nil
 }
 
 // generateArchivedReposRemoval processing each Terraform file by calling processTerraformFile and then writing a bash script to outputDir
@@ -77,52 +123,6 @@ func generateArchivedReposRemoval(rootDir, outputDir string, tfFiles []terraform
 	}
 
 	return nil
-}
-
-// getTerraformFilesInDirectories returns all the Terraform (*.tf) files one directory down from the rootPath.
-// Filters for only Terraform files which include github_repository references, either explicit or in a module.
-// Excludes config.tf files as these are symlinked and contain target strings in comments which is causing false positives.
-func getTerraformFilesInDirectories(rootPath string) ([]terraformFile, error) {
-	results := make([]terraformFile, 0)
-
-	rootEntries, err := os.ReadDir(rootPath)
-	if err != nil {
-		return results, fmt.Errorf("failed to read root directory: %w", err)
-	}
-
-	for _, entry := range rootEntries {
-		if entry.IsDir() {
-			childDirectoryPath := fmt.Sprintf("%s/%s", rootPath, entry.Name())
-
-			childDirEntries, err := os.ReadDir(childDirectoryPath)
-			if err != nil {
-				return results, fmt.Errorf("failed to read child directory %s: %w", childDirectoryPath, err)
-			}
-
-			for _, childDirEntry := range childDirEntries {
-				// Only process *.tf files
-				if strings.HasSuffix(childDirEntry.Name(), ".tf") {
-
-					// Check that the file contains either a module reference or a github_repository reference.
-					// Also exclude config.tf as this is a symlink and causes a false positive due to a string being the comments.
-					body, err := os.ReadFile(filepath.Join(childDirectoryPath, childDirEntry.Name()))
-					if err != nil {
-						return results, fmt.Errorf("failed to read child directory %s: %w", childDirectoryPath, err)
-					}
-					if (!strings.Contains(string(body), "github_repository") && !strings.Contains(string(body), targetTFModuleName)) || childDirEntry.Name() == "config.tf" {
-						continue
-					}
-
-					results = append(results, terraformFile{
-						fileName:      childDirEntry.Name(),
-						directoryName: entry.Name(),
-					})
-				}
-			}
-		}
-	}
-
-	return results, nil
 }
 
 // processTerraformFile reads a Terraform file and returns the github_repository resources which are archived.
